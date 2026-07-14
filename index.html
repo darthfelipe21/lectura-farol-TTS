@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#12141b">
 <title>Farol — lector en voz alta</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   :root{
     --bg:#12141b; --surface:#1b1e28; --surface2:#232735;
@@ -178,7 +179,7 @@
       <li>En el libro, toca el menú <strong>⋮</strong> → <strong>Exportar</strong> y elige <strong>EPUB</strong>.</li>
       <li>Guarda el archivo en tu celular y añádelo aquí con el botón <strong>＋ Añadir libro</strong>.</li>
     </ol>
-    Los libros con DRM de Adobe no se pueden abrir; los EPUB sin protección y los archivos .txt funcionan sin problema. Todo se procesa y guarda solo en este dispositivo.
+    Los libros con DRM de Adobe no se pueden abrir; los EPUB sin protección, los PDF con texto y los archivos .txt funcionan sin problema. Ojo: los PDF <em>escaneados</em> (imágenes de páginas) no tienen texto extraíble. Todo se procesa y guarda solo en este dispositivo.
   </details>
 
   <div id="bookList"></div>
@@ -187,7 +188,7 @@
     Tu biblioteca está vacía.<br>Añade un EPUB o TXT para empezar a escucharlo.
   </div>
 
-  <input type="file" id="fileInput" accept=".epub,.txt,application/epub+zip,text/plain" multiple hidden>
+  <input type="file" id="fileInput" accept=".epub,.txt,.pdf,application/epub+zip,text/plain,application/pdf" multiple hidden>
   <button id="addBtn">＋ Añadir libro</button>
 </div>
 
@@ -440,6 +441,73 @@ function parseTxt(text, filename){
   return { title: filename.replace(/\.txt$/i, ''), author: '', chapters: [{ title: 'Texto completo', blocks }] };
 }
 
+/* ---------- parser PDF (pdf.js → texto por página) ---------- */
+async function parsePdf(file){
+  if(typeof pdfjsLib === 'undefined') throw new Error('No se pudo cargar pdf.js (¿sin internet?)');
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+
+  // título desde los metadatos si existe
+  let title = file.name.replace(/\.pdf$/i, ''), author = '';
+  try{
+    const meta = await pdf.getMetadata();
+    if(meta.info){
+      if(meta.info.Title && meta.info.Title.trim()) title = meta.info.Title.trim();
+      if(meta.info.Author && meta.info.Author.trim()) author = meta.info.Author.trim();
+    }
+  }catch(e){}
+
+  // extraer texto página por página, reconstruyendo líneas por coordenada Y
+  const pages = [];
+  for(let p = 1; p <= pdf.numPages; p++){
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    let lines = [], line = '', lastY = null;
+    for(const item of content.items){
+      const y = item.transform ? item.transform[5] : 0;
+      if(lastY !== null && Math.abs(y - lastY) > 3){ // salto de línea
+        if(line.trim()) lines.push(line.trim());
+        line = '';
+      }
+      line += item.str + (item.hasEOL ? ' ' : '');
+      lastY = y;
+    }
+    if(line.trim()) lines.push(line.trim());
+
+    // unir líneas: quitar guiones de corte de palabra y fusionar en un flujo
+    let text = '';
+    for(const l of lines){
+      if(/[a-záéíóúüñ]-$/i.test(text.trim())) text = text.trim().slice(0, -1) + l; // palabra corta-da
+      else text += (text ? ' ' : '') + l;
+    }
+    text = text.replace(/\s+/g, ' ').trim();
+    pages.push(text);
+    page.cleanup();
+  }
+
+  // agrupar páginas en secciones de 10 para navegar cómodo
+  const PAGES_POR_SECCION = 10;
+  const chapters = [];
+  for(let i = 0; i < pages.length; i += PAGES_POR_SECCION){
+    const grupo = pages.slice(i, i + PAGES_POR_SECCION);
+    const blocks = [];
+    grupo.forEach((pg, j)=>{
+      if(!pg) return;
+      blocks.push({ t:'p', s: splitSentences(pg) });
+    });
+    if(!blocks.length) continue;
+    const desde = i + 1, hasta = Math.min(i + PAGES_POR_SECCION, pages.length);
+    chapters.push({
+      title: desde === hasta ? 'Página ' + desde : 'Páginas ' + desde + '–' + hasta,
+      blocks
+    });
+  }
+  if(!chapters.length) throw new Error('El PDF no contiene texto extraíble (¿es un escaneo?)');
+  return { title, author, chapters };
+}
+
 function countBook(book){
   book.counts = book.chapters.map(ch => ch.blocks.reduce((n, b)=>n + b.s.length, 0));
   book.total = book.counts.reduce((a, b)=>a + b, 0);
@@ -505,6 +573,7 @@ async function importFiles(files){
     try{
       let parsed;
       if(/\.epub$/i.test(file.name)) parsed = await parseEpub(file);
+      else if(/\.pdf$/i.test(file.name)) parsed = await parsePdf(file);
       else if(/\.txt$/i.test(file.name)) parsed = parseTxt(await file.text(), file.name);
       else{ toast('Formato no compatible: ' + file.name); continue; }
       countBook(parsed);
