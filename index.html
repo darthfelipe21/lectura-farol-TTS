@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#12141b">
+<title>Farol — lector en voz alta</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#12141b; --surface:#1b1e28; --surface2:#232735;
+    --text:#ded9cd; --muted:#8b8fa0; --border:#2b3040;
+    --lamp:#e9a84c; --lamp-soft:rgba(233,168,76,.16); --lamp-glow:rgba(233,168,76,.35);
+    --danger:#e06c5f; --book-size:19px;
+  }
+  [data-theme="light"]{
+    --bg:#f4f0e6; --surface:#fbf8f1; --surface2:#efe9db;
+    --text:#2a2620; --muted:#7c766a; --border:#ddd5c4;
+    --lamp:#a86710; --lamp-soft:rgba(196,132,32,.18); --lamp-glow:rgba(196,132,32,.30);
+    --danger:#b8422f;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    min-height:100vh; transition:background .3s,color .3s;
+  }
+  button{font-family:inherit; color:inherit; background:none; border:none; cursor:pointer}
+  .screen{max-width:680px; margin:0 auto; padding:0 18px}
+  .hidden{display:none !important}
+
+  /* ===== hilo de progreso ===== */
+  #hilo{position:fixed; top:0; left:0; height:3px; width:0%;
+    background:var(--lamp); box-shadow:0 0 8px var(--lamp-glow);
+    z-index:60; transition:width .4s ease}
+
+  /* ===== Biblioteca ===== */
+  #libHeader{padding:34px 0 6px}
+  #libHeader h1{font-family:Georgia,'Iowan Old Style',serif; font-size:34px; margin:0; letter-spacing:.5px}
+  #libHeader h1 .dot{color:var(--lamp)}
+  #libHeader p{margin:6px 0 0; color:var(--muted); font-size:14px}
+  #bookList{padding:18px 0 120px; display:flex; flex-direction:column; gap:12px}
+  .bookCard{
+    display:flex; gap:14px; align-items:center; text-align:left; width:100%;
+    background:var(--surface); border:1px solid var(--border); border-radius:14px;
+    padding:14px 16px; transition:transform .1s;
+  }
+  .bookCard:active{transform:scale(.98)}
+  .bookSpine{width:8px; align-self:stretch; border-radius:4px; background:var(--lamp); opacity:.85; flex:none}
+  .bookInfo{flex:1; min-width:0}
+  .bookInfo .t{font-family:Georgia,serif; font-size:17px; line-height:1.25; margin:0 0 3px;
+    overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical}
+  .bookInfo .a{font-size:13px; color:var(--muted); margin:0 0 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .pbar{height:4px; background:var(--surface2); border-radius:2px; overflow:hidden}
+  .pbar>div{height:100%; background:var(--lamp); border-radius:2px}
+  .pct{font-size:11px; color:var(--muted); margin-top:4px}
+  .delBtn{color:var(--muted); padding:10px; flex:none; border-radius:10px}
+  .delBtn:active{color:var(--danger)}
+  #emptyLib{text-align:center; color:var(--muted); padding:70px 20px; font-size:15px; line-height:1.7}
+  #emptyLib .big{font-size:44px; display:block; margin-bottom:12px}
+  #addBtn{
+    position:fixed; bottom:26px; right:calc(50% - min(50%,340px) + 22px);
+    background:var(--lamp); color:#1a1408; font-weight:600; font-size:15px;
+    padding:15px 22px; border-radius:30px; box-shadow:0 4px 18px var(--lamp-glow); z-index:40;
+  }
+  details.ayuda{margin:4px 0 30px; color:var(--muted); font-size:13.5px; line-height:1.65;
+    background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px 16px}
+  details.ayuda summary{cursor:pointer; color:var(--text); font-size:14px}
+  details.ayuda ol{padding-left:18px; margin:10px 0 4px}
+  details.ayuda a{color:var(--lamp)}
+
+  /* ===== Lector ===== */
+  #readerBar{
+    position:sticky; top:0; z-index:30; background:var(--bg);
+    display:flex; align-items:center; gap:8px; padding:12px 4px 10px;
+    border-bottom:1px solid var(--border);
+  }
+  #readerBar .iconBtn{padding:8px; border-radius:10px; color:var(--muted); flex:none}
+  #readerBar .iconBtn:active{background:var(--surface2)}
+  #readerTitle{flex:1; min-width:0; text-align:center}
+  #readerTitle .bt{font-family:Georgia,serif; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  #readerTitle .ct{font-size:11.5px; color:var(--muted); margin-top:2px}
+  #bookText{
+    font-family:Georgia,'Iowan Old Style','Times New Roman',serif;
+    font-size:var(--book-size); line-height:1.75; padding:26px 2px 190px;
+  }
+  #bookText h3{font-size:calc(var(--book-size) * 1.25); line-height:1.4; margin:30px 0 12px}
+  #bookText p{margin:0 0 1em}
+  #bookText span[data-s]{border-radius:6px; padding:1px 2px; transition:background .25s, box-shadow .25s; cursor:pointer}
+  /* la lámpara: la oración que se está leyendo */
+  span.leyendo{
+    background:var(--lamp-soft);
+    box-shadow:0 0 0 4px var(--lamp-soft), 0 0 18px var(--lamp-glow);
+    color:var(--text);
+  }
+  #tapHint{color:var(--muted); font-size:12.5px; text-align:center; padding:10px 0 0; font-family:system-ui}
+
+  /* ===== Barra de reproducción ===== */
+  #player{
+    position:fixed; bottom:0; left:0; right:0; z-index:35;
+    display:flex; justify-content:center; padding:0 14px calc(14px + env(safe-area-inset-bottom));
+    pointer-events:none;
+  }
+  #playerInner{
+    pointer-events:auto; width:100%; max-width:520px;
+    background:var(--surface); border:1px solid var(--border); border-radius:22px;
+    box-shadow:0 8px 30px rgba(0,0,0,.35); padding:12px 18px 10px;
+  }
+  #ctrRow{display:flex; align-items:center; justify-content:center; gap:26px}
+  .ctlBtn{color:var(--text); padding:10px; border-radius:50%}
+  .ctlBtn:active{background:var(--surface2)}
+  #playBtn{
+    width:62px; height:62px; border-radius:50%; background:var(--lamp); color:#1a1408;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 3px 14px var(--lamp-glow); flex:none;
+  }
+  #playBtn:active{transform:scale(.95)}
+  #subRow{display:flex; align-items:center; justify-content:space-between; margin-top:6px; color:var(--muted); font-size:12.5px}
+  #subRow button{color:var(--muted); padding:7px 10px; border-radius:9px; display:flex; align-items:center; gap:5px; font-size:12.5px}
+  #subRow button:active{background:var(--surface2)}
+  #rateLabel{color:var(--lamp); font-weight:600}
+
+  /* ===== Paneles ===== */
+  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:70; display:flex; align-items:flex-end; justify-content:center}
+  .sheet{
+    background:var(--surface); border:1px solid var(--border); border-bottom:none;
+    border-radius:20px 20px 0 0; width:100%; max-width:680px;
+    max-height:78vh; overflow-y:auto; padding:10px 22px calc(26px + env(safe-area-inset-bottom));
+  }
+  .sheet h2{font-size:16px; margin:14px 0 14px; font-family:Georgia,serif}
+  .grab{width:42px; height:4px; border-radius:2px; background:var(--border); margin:8px auto 0}
+  .chapItem{display:block; width:100%; text-align:left; padding:13px 12px; border-radius:10px;
+    font-size:14.5px; border-bottom:1px solid var(--border)}
+  .chapItem:last-child{border-bottom:none}
+  .chapItem.actual{color:var(--lamp); font-weight:600}
+  .setRow{margin:0 0 22px}
+  .setRow label{display:block; font-size:13px; color:var(--muted); margin-bottom:8px}
+  .setRow input[type=range]{width:100%; accent-color:var(--lamp)}
+  .setRow select{
+    width:100%; background:var(--surface2); color:var(--text); border:1px solid var(--border);
+    border-radius:10px; padding:11px 12px; font-size:14px; font-family:inherit;
+  }
+  .chipRow{display:flex; gap:8px; flex-wrap:wrap}
+  .chip{border:1px solid var(--border); background:var(--surface2); border-radius:20px; padding:9px 16px; font-size:13.5px}
+  .chip.on{background:var(--lamp); color:#1a1408; border-color:var(--lamp); font-weight:600}
+
+  #toast{
+    position:fixed; bottom:110px; left:50%; transform:translateX(-50%);
+    background:var(--surface2); border:1px solid var(--border); color:var(--text);
+    padding:11px 18px; border-radius:12px; font-size:13.5px; z-index:90;
+    max-width:86vw; text-align:center; box-shadow:0 4px 16px rgba(0,0,0,.3);
+    opacity:0; transition:opacity .3s; pointer-events:none;
+  }
+  #toast.show{opacity:1}
+
+  @media (prefers-reduced-motion: reduce){
+    *{transition:none !important; scroll-behavior:auto !important}
+  }
+</style>
+</head>
+<body>
+
+<div id="hilo"></div>
+<div id="toast" role="status"></div>
+
+<!-- ============ BIBLIOTECA ============ -->
+<div id="libScreen" class="screen">
+  <header id="libHeader">
+    <h1>Farol<span class="dot">.</span></h1>
+    <p>Tu biblioteca, en voz alta</p>
+  </header>
+
+  <details class="ayuda">
+    <summary>¿Cómo traer mis libros de Google Play Books?</summary>
+    <ol>
+      <li>Entra a <a href="https://play.google.com/books" target="_blank" rel="noopener">play.google.com/books</a> desde un navegador.</li>
+      <li>En el libro, toca el menú <strong>⋮</strong> → <strong>Exportar</strong> y elige <strong>EPUB</strong>.</li>
+      <li>Guarda el archivo en tu celular y añádelo aquí con el botón <strong>＋ Añadir libro</strong>.</li>
+    </ol>
+    Los libros con DRM de Adobe no se pueden abrir; los EPUB sin protección y los archivos .txt funcionan sin problema. Todo se procesa y guarda solo en este dispositivo.
+  </details>
+
+  <div id="bookList"></div>
+  <div id="emptyLib" class="hidden">
+    <span class="big">🏮</span>
+    Tu biblioteca está vacía.<br>Añade un EPUB o TXT para empezar a escucharlo.
+  </div>
+
+  <input type="file" id="fileInput" accept=".epub,.txt,application/epub+zip,text/plain" multiple hidden>
+  <button id="addBtn">＋ Añadir libro</button>
+</div>
+
+<!-- ============ LECTOR ============ -->
+<div id="readScreen" class="screen hidden">
+  <div id="readerBar">
+    <button class="iconBtn" id="backBtn" aria-label="Volver a la biblioteca">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <div id="readerTitle">
+      <div class="bt" id="rtBook"></div>
+      <div class="ct" id="rtChap"></div>
+    </div>
+    <button class="iconBtn" id="chapBtn" aria-label="Capítulos">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    </button>
+  </div>
+
+  <div id="tapHint">Toca cualquier oración para leer desde ahí</div>
+  <div id="bookText"></div>
+
+  <div id="player">
+    <div id="playerInner">
+      <div id="ctrRow">
+        <button class="ctlBtn" id="prevBtn" aria-label="Oración anterior">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14l-9-7 9-7z"/><rect x="5" y="5" width="2.4" height="14" rx="1"/></svg>
+        </button>
+        <button id="playBtn" aria-label="Reproducir o pausar">
+          <svg id="icoPlay" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5-13-7.5z"/></svg>
+          <svg id="icoPause" class="hidden" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="4.5" width="4.6" height="15" rx="1.4"/><rect x="13.9" y="4.5" width="4.6" height="15" rx="1.4"/></svg>
+        </button>
+        <button class="ctlBtn" id="nextBtn" aria-label="Oración siguiente">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l9-7-9-7z"/><rect x="16.6" y="5" width="2.4" height="14" rx="1"/></svg>
+        </button>
+      </div>
+      <div id="subRow">
+        <button id="rateBtn" aria-label="Cambiar velocidad">velocidad <span id="rateLabel">×1.0</span></button>
+        <button id="sleepBtn" aria-label="Temporizador">🌙 <span id="sleepLabel">apagado</span></button>
+        <button id="setBtn" aria-label="Ajustes">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.56 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1H3a2 2 0 110-4h.09a1.7 1.7 0 001.56-1 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34h.01a1.7 1.7 0 001-1.56V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.56h.01a1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87v.01a1.7 1.7 0 001.56 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1z"/></svg>
+          ajustes
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PANEL: CAPÍTULOS ============ -->
+<div id="chapOverlay" class="overlay hidden">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h2>Capítulos</h2>
+    <div id="chapList"></div>
+  </div>
+</div>
+
+<!-- ============ PANEL: AJUSTES ============ -->
+<div id="setOverlay" class="overlay hidden">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h2>Ajustes</h2>
+
+    <div class="setRow">
+      <label for="rateRange">Velocidad de lectura: <span id="rateVal">×1.0</span></label>
+      <input type="range" id="rateRange" min="0.5" max="2" step="0.05" value="1">
+    </div>
+
+    <div class="setRow">
+      <label for="voiceSel">Voz</label>
+      <select id="voiceSel"></select>
+    </div>
+
+    <div class="setRow">
+      <label for="fontRange">Tamaño de letra: <span id="fontVal">19</span> px</label>
+      <input type="range" id="fontRange" min="15" max="26" step="1" value="19">
+    </div>
+
+    <div class="setRow">
+      <label>Temporizador para dormir</label>
+      <div class="chipRow" id="sleepChips">
+        <button class="chip on" data-min="0">Apagado</button>
+        <button class="chip" data-min="15">15 min</button>
+        <button class="chip" data-min="30">30 min</button>
+        <button class="chip" data-min="60">60 min</button>
+      </div>
+    </div>
+
+    <div class="setRow">
+      <label>Tema</label>
+      <div class="chipRow">
+        <button class="chip" id="themeDark">🌒 Oscuro</button>
+        <button class="chip" id="themeLight">☀️ Claro</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* =====================================================
+   Farol — lector personal en voz alta
+   Un solo archivo. EPUB/TXT → texto → SpeechSynthesis.
+   Todo local: IndexedDB para libros, progreso y ajustes.
+   ===================================================== */
+
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+let toastTimer = null;
+function toast(msg, ms=2600){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), ms);
+}
+
+/* ---------- almacenamiento (IndexedDB) ---------- */
+let storageOK = true, _db = null;
+function db(){
+  if(_db) return Promise.resolve(_db);
+  return new Promise((res, rej)=>{
+    try{
+      const rq = indexedDB.open('farol-db', 1);
+      rq.onupgradeneeded = e=>{
+        const d = e.target.result;
+        if(!d.objectStoreNames.contains('books')) d.createObjectStore('books', {keyPath:'id'});
+        if(!d.objectStoreNames.contains('kv'))    d.createObjectStore('kv',    {keyPath:'k'});
+      };
+      rq.onsuccess = ()=>{ _db = rq.result; res(_db); };
+      rq.onerror = ()=>rej(rq.error);
+    }catch(e){ rej(e); }
+  });
+}
+const reqP = r => new Promise((res, rej)=>{ r.onsuccess = ()=>res(r.result); r.onerror = ()=>rej(r.error); });
+async function dbAllBooks(){ const d = await db(); return reqP(d.transaction('books').objectStore('books').getAll()); }
+async function dbGetBook(id){ const d = await db(); return reqP(d.transaction('books').objectStore('books').get(id)); }
+async function dbPutBook(b){ const d = await db(); return reqP(d.transaction('books','readwrite').objectStore('books').put(b)); }
+async function dbDelBook(id){ const d = await db(); return reqP(d.transaction('books','readwrite').objectStore('books').delete(id)); }
+async function kvGet(k){ const d = await db(); const r = await reqP(d.transaction('kv').objectStore('kv').get(k)); return r ? r.v : undefined; }
+async function kvSet(k, v){ const d = await db(); return reqP(d.transaction('kv','readwrite').objectStore('kv').put({k, v})); }
+async function kvDel(k){ const d = await db(); return reqP(d.transaction('kv','readwrite').objectStore('kv').delete(k)); }
+
+/* ---------- utilidades de texto ---------- */
+function splitSentences(text){
+  const raw = text.match(/[^.!?…]+[.!?…]+[»”"')\]]*|[^.!?…]+$/g) || [text];
+  const out = [];
+  const ABREV = /\b(Sr|Sra|Srta|Dr|Dra|Lic|Ing|Prof|etc|pág|p|No|núm|art|Av|EE|UU|a\.m|p\.m|vs)\.$/i;
+  for(let s of raw){
+    s = s.trim();
+    if(!s) continue;
+    const prev = out[out.length-1];
+    if(prev && (prev.length < 4 || ABREV.test(prev))) out[out.length-1] = prev + ' ' + s;
+    else out.push(s);
+  }
+  // trocear oraciones larguísimas para que el TTS no se atragante
+  const final = [];
+  for(const s of out){
+    if(s.length <= 300){ final.push(s); continue; }
+    const pieces = s.split(', ');
+    let cur = '';
+    for(let i=0; i<pieces.length; i++){
+      const chunk = pieces[i] + (i < pieces.length-1 ? ',' : '');
+      if(cur && (cur.length + chunk.length) > 220){ final.push(cur.trim()); cur = chunk; }
+      else cur = cur ? cur + ' ' + chunk : chunk;
+    }
+    if(cur.trim()) final.push(cur.trim());
+  }
+  return final;
+}
+
+function resolvePath(basePath, rel){
+  const stack = basePath.split('/').slice(0, -1);
+  for(const part of rel.split('/')){
+    if(part === '' || part === '.') continue;
+    if(part === '..') stack.pop();
+    else stack.push(part);
+  }
+  return stack.join('/');
+}
+
+/* ---------- parser EPUB (spine → texto plano) ---------- */
+async function parseEpub(file){
+  const zip = await JSZip.loadAsync(file);
+  const containerFile = zip.file('META-INF/container.xml');
+  if(!containerFile) throw new Error('EPUB inválido: falta container.xml');
+  const cdoc = new DOMParser().parseFromString(await containerFile.async('string'), 'application/xml');
+  const rootfile = cdoc.getElementsByTagName('rootfile')[0];
+  if(!rootfile) throw new Error('EPUB inválido: sin rootfile');
+  const opfPath = rootfile.getAttribute('full-path');
+  const opfFile = zip.file(opfPath);
+  if(!opfFile) throw new Error('EPUB inválido: no se encontró el OPF');
+  const opf = new DOMParser().parseFromString(await opfFile.async('string'), 'application/xml');
+
+  const tEl = opf.getElementsByTagNameNS('*','title')[0];
+  const aEl = opf.getElementsByTagNameNS('*','creator')[0];
+  const title  = (tEl && tEl.textContent.trim()) || file.name.replace(/\.epub$/i, '');
+  const author = (aEl && aEl.textContent.trim()) || '';
+
+  const items = {};
+  for(const it of opf.getElementsByTagName('item')){
+    items[it.getAttribute('id')] = { href: it.getAttribute('href'), type: it.getAttribute('media-type') || '' };
+  }
+  const spine = [];
+  for(const r of opf.getElementsByTagName('itemref')){
+    const it = items[r.getAttribute('idref')];
+    if(it && /html|xml/i.test(it.type)) spine.push(it);
+  }
+  if(!spine.length) throw new Error('EPUB sin contenido de texto (¿tiene DRM?)');
+
+  const chapters = [];
+  for(const it of spine){
+    let href = it.href; try{ href = decodeURIComponent(href); }catch(e){}
+    href = href.split('#')[0];
+    const f = zip.file(resolvePath(opfPath, href));
+    if(!f) continue;
+    const html = await f.async('string');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const body = doc.body;
+    if(!body) continue;
+
+    const blocks = [];
+    body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote').forEach(el=>{
+      if(el.querySelector('p, h1, h2, h3, h4, li')) return; // saltar contenedores
+      const text = el.textContent.replace(/\s+/g, ' ').trim();
+      if(!text) return;
+      blocks.push({ t: /^H[1-6]$/.test(el.tagName) ? 'h' : 'p', s: splitSentences(text) });
+    });
+    if(!blocks.length){
+      const text = body.textContent.replace(/\s+/g, ' ').trim();
+      if(text) blocks.push({ t:'p', s: splitSentences(text) });
+    }
+    if(!blocks.length) continue;
+
+    const head = blocks.find(b => b.t === 'h');
+    chapters.push({
+      title: head ? head.s.join(' ').slice(0, 90) : 'Sección ' + (chapters.length + 1),
+      blocks
+    });
+  }
+  if(!chapters.length) throw new Error('No se pudo extraer texto legible (posible DRM)');
+  return { title, author, chapters };
+}
+
+function parseTxt(text, filename){
+  const parts = text.replace(/\r/g, '').split(/\n\s*\n+/);
+  const blocks = [];
+  for(const p of parts){
+    const t = p.replace(/\s+/g, ' ').trim();
+    if(t) blocks.push({ t:'p', s: splitSentences(t) });
+  }
+  if(!blocks.length) throw new Error('El archivo de texto está vacío');
+  return { title: filename.replace(/\.txt$/i, ''), author: '', chapters: [{ title: 'Texto completo', blocks }] };
+}
+
+function countBook(book){
+  book.counts = book.chapters.map(ch => ch.blocks.reduce((n, b)=>n + b.s.length, 0));
+  book.total = book.counts.reduce((a, b)=>a + b, 0);
+}
+
+/* ---------- biblioteca ---------- */
+async function renderLibrary(){
+  let books = [];
+  try{ books = await dbAllBooks(); }
+  catch(e){
+    storageOK = false;
+    $('emptyLib').classList.remove('hidden');
+    $('emptyLib').innerHTML = '<span class="big">⚠️</span>El almacenamiento local no está disponible en este entorno.<br>Abre este archivo en Chrome (Android o escritorio) para usar la biblioteca.';
+    return;
+  }
+  books.sort((a, b)=>(b.lastOpened || 0) - (a.lastOpened || 0));
+  const list = $('bookList');
+  list.innerHTML = '';
+  $('emptyLib').classList.toggle('hidden', books.length > 0);
+
+  for(const b of books){
+    let pct = 0;
+    try{
+      const prog = await kvGet('prog:' + b.id);
+      if(prog && b.total){
+        let done = 0;
+        for(let c=0; c<prog.ch; c++) done += b.counts[c] || 0;
+        const ch = b.chapters[prog.ch];
+        if(ch){ for(let bl=0; bl<prog.b; bl++) done += ch.blocks[bl].s.length; done += prog.s; }
+        pct = Math.min(100, Math.round(done / b.total * 100));
+      }
+    }catch(e){}
+
+    const card = document.createElement('button');
+    card.className = 'bookCard';
+    card.innerHTML =
+      '<div class="bookSpine"></div>' +
+      '<div class="bookInfo">' +
+        '<p class="t">' + esc(b.title) + '</p>' +
+        '<p class="a">' + esc(b.author || 'Autor desconocido') + '</p>' +
+        '<div class="pbar"><div style="width:' + pct + '%"></div></div>' +
+        '<div class="pct">' + (pct > 0 ? pct + '% · toca para continuar' : 'Sin empezar') + '</div>' +
+      '</div>' +
+      '<span class="delBtn" role="button" aria-label="Eliminar libro">' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-9 0l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>' +
+      '</span>';
+    card.querySelector('.delBtn').addEventListener('click', async ev=>{
+      ev.stopPropagation();
+      if(confirm('¿Eliminar «' + b.title + '» de tu biblioteca?')){
+        await dbDelBook(b.id);
+        await kvDel('prog:' + b.id).catch(()=>{});
+        renderLibrary();
+      }
+    });
+    card.addEventListener('click', ()=>openBook(b.id));
+    list.appendChild(card);
+  }
+}
+
+async function importFiles(files){
+  for(const file of files){
+    toast('Procesando «' + file.name + '»…', 60000);
+    try{
+      let parsed;
+      if(/\.epub$/i.test(file.name)) parsed = await parseEpub(file);
+      else if(/\.txt$/i.test(file.name)) parsed = parseTxt(await file.text(), file.name);
+      else{ toast('Formato no compatible: ' + file.name); continue; }
+      countBook(parsed);
+      parsed.id = (crypto.randomUUID ? crypto.randomUUID() : 'b' + Date.now() + Math.random().toString(36).slice(2));
+      parsed.lastOpened = Date.now();
+      await dbPutBook(parsed);
+      toast('«' + parsed.title + '» añadido ✓');
+    }catch(err){
+      console.error(err);
+      toast('No se pudo abrir «' + file.name + '»: ' + err.message, 4500);
+    }
+  }
+  renderLibrary();
+}
+
+$('addBtn').addEventListener('click', ()=>$('fileInput').click());
+$('fileInput').addEventListener('change', e=>{
+  if(e.target.files.length) importFiles([...e.target.files]);
+  e.target.value = '';
+});
+
+/* ---------- motor de lectura ---------- */
+const player = {
+  book: null, ch: 0, b: 0, s: 0,
+  playing: false, utter: null, wakeLock: null,
+  rate: 1, voice: null,
+  sleepAt: 0, sleepTimer: null,
+
+  current(){
+    const ch = this.book && this.book.chapters[this.ch];
+    const bl = ch && ch.blocks[this.b];
+    return bl ? bl.s[this.s] : null;
+  },
+
+  detach(){
+    if(this.utter){ this.utter.onend = null; this.utter.onerror = null; this.utter = null; }
+  },
+  stopSpeech(){ this.detach(); try{ speechSynthesis.cancel(); }catch(e){} },
+
+  speakCurrent(){
+    const text = this.current();
+    if(text == null){ this.finish(); return; }
+    this.stopSpeech();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = this.rate;
+    if(this.voice){ u.voice = this.voice; u.lang = this.voice.lang; }
+    else u.lang = 'es';
+    u.onend = ()=>{ if(this.playing) this.advance(true); };
+    u.onerror = e=>{
+      if(this.playing && e.error !== 'interrupted' && e.error !== 'canceled') this.advance(true);
+    };
+    this.utter = u;
+    try{ speechSynthesis.speak(u); }catch(e){ toast('Error del sintetizador de voz'); this.setPlaying(false); }
+    highlight();
+  },
+
+  advance(keepSpeaking){
+    const chap = this.book.chapters[this.ch];
+    this.s++;
+    if(this.s >= chap.blocks[this.b].s.length){ this.s = 0; this.b++; }
+    if(this.b >= chap.blocks.length){
+      this.b = 0; this.ch++;
+      if(this.ch >= this.book.chapters.length){ this.finish(); return; }
+      renderChapter();
+    }
+    saveProgress();
+    if(keepSpeaking && this.playing) this.speakCurrent();
+    else highlight();
+  },
+
+  retreat(){
+    if(this.s > 0) this.s--;
+    else if(this.b > 0){ this.b--; this.s = this.book.chapters[this.ch].blocks[this.b].s.length - 1; }
+    else if(this.ch > 0){
+      this.ch--;
+      const blocks = this.book.chapters[this.ch].blocks;
+      this.b = blocks.length - 1;
+      this.s = blocks[this.b].s.length - 1;
+      renderChapter();
+    }
+    saveProgress();
+    if(this.playing) this.speakCurrent(); else highlight();
+  },
+
+  skipForward(){
+    if(this.playing) this.advance(true);
+    else{ this.advance(false); }
+  },
+
+  jumpTo(ch, b, s){
+    const changed = ch !== this.ch;
+    this.ch = ch; this.b = b; this.s = s;
+    if(changed) renderChapter();
+    saveProgress();
+    if(this.playing) this.speakCurrent(); else highlight();
+  },
+
+  setPlaying(on){
+    this.playing = on;
+    $('icoPlay').classList.toggle('hidden', on);
+    $('icoPause').classList.toggle('hidden', !on);
+    if(on) this.acquireWake(); else this.releaseWake();
+  },
+
+  play(){
+    if(!this.current()){ toast('Fin del libro'); return; }
+    this.setPlaying(true);
+    this.speakCurrent();
+  },
+  pause(){
+    this.setPlaying(false);
+    this.stopSpeech();
+    saveProgress(true);
+  },
+  toggle(){ this.playing ? this.pause() : this.play(); },
+
+  finish(){
+    this.setPlaying(false);
+    this.stopSpeech();
+    toast('📖 Fin del libro');
+    saveProgress(true);
+  },
+
+  async acquireWake(){
+    try{ if('wakeLock' in navigator) this.wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
+  },
+  releaseWake(){
+    try{ if(this.wakeLock){ this.wakeLock.release(); this.wakeLock = null; } }catch(e){}
+  },
+
+  setSleep(min){
+    clearTimeout(this.sleepTimer);
+    if(min > 0){
+      this.sleepAt = Date.now() + min * 60000;
+      this.sleepTimer = setTimeout(()=>{
+        this.pause();
+        this.sleepAt = 0;
+        updateSleepUI(0);
+        toast('🌙 Temporizador: lectura pausada');
+      }, min * 60000);
+      toast('Temporizador: ' + min + ' minutos');
+    }else{
+      this.sleepAt = 0;
+    }
+    updateSleepUI(min);
+  }
+};
+
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && player.playing) player.acquireWake();
+});
+
+/* ---------- progreso ---------- */
+let progTimer = null;
+function saveProgress(now){
+  if(!player.book || !storageOK) return;
+  const write = ()=>kvSet('prog:' + player.book.id, { ch: player.ch, b: player.b, s: player.s }).catch(()=>{});
+  if(now){ clearTimeout(progTimer); write(); return; }
+  clearTimeout(progTimer);
+  progTimer = setTimeout(write, 800);
+}
+
+function linearIndex(){
+  let done = 0;
+  for(let c=0; c<player.ch; c++) done += player.book.counts[c];
+  const ch = player.book.chapters[player.ch];
+  if(ch){ for(let bl=0; bl<player.b; bl++) done += ch.blocks[bl].s.length; done += player.s; }
+  return done;
+}
+
+/* ---------- lector: render y resaltado ---------- */
+function renderChapter(){
+  const ch = player.book.chapters[player.ch];
+  let html = '';
+  ch.blocks.forEach((blk, bi)=>{
+    const spans = blk.s.map((sent, si)=>
+      '<span data-b="' + bi + '" data-s="' + si + '">' + esc(sent) + '</span>'
+    ).join(' ');
+    html += blk.t === 'h' ? '<h3>' + spans + '</h3>' : '<p>' + spans + '</p>';
+  });
+  $('bookText').innerHTML = html;
+  $('rtChap').textContent = 'Cap. ' + (player.ch + 1) + ' de ' + player.book.chapters.length + ' — ' + ch.title;
+  window.scrollTo(0, 0);
+}
+
+function highlight(){
+  const prev = document.querySelector('span.leyendo');
+  if(prev) prev.classList.remove('leyendo');
+  const el = document.querySelector('span[data-b="' + player.b + '"][data-s="' + player.s + '"]');
+  if(el){
+    el.classList.add('leyendo');
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  if(player.book && player.book.total){
+    $('hilo').style.width = (linearIndex() / player.book.total * 100).toFixed(2) + '%';
+  }
+}
+
+$('bookText').addEventListener('click', e=>{
+  const span = e.target.closest('span[data-s]');
+  if(!span) return;
+  player.jumpTo(player.ch, +span.dataset.b, +span.dataset.s);
+  if(!player.playing) player.play();
+});
+
+/* ---------- abrir / cerrar libro ---------- */
+async function openBook(id){
+  const book = await dbGetBook(id);
+  if(!book){ toast('No se encontró el libro'); return; }
+  if(!book.counts) countBook(book);
+  player.book = book;
+  const prog = await kvGet('prog:' + id).catch(()=>null);
+  player.ch = Math.min(prog ? prog.ch : 0, book.chapters.length - 1);
+  const chap = book.chapters[player.ch];
+  player.b = Math.min(prog ? prog.b : 0, chap.blocks.length - 1);
+  player.s = Math.min(prog ? prog.s : 0, chap.blocks[player.b].s.length - 1);
+
+  book.lastOpened = Date.now();
+  dbPutBook(book).catch(()=>{});
+
+  $('rtBook').textContent = book.title;
+  $('libScreen').classList.add('hidden');
+  $('readScreen').classList.remove('hidden');
+  renderChapter();
+  requestAnimationFrame(()=>highlight());
+  buildChapterList();
+}
+
+$('backBtn').addEventListener('click', ()=>{
+  player.pause();
+  player.book = null;
+  $('hilo').style.width = '0%';
+  $('readScreen').classList.add('hidden');
+  $('libScreen').classList.remove('hidden');
+  renderLibrary();
+});
+
+/* ---------- controles ---------- */
+$('playBtn').addEventListener('click', ()=>player.toggle());
+$('prevBtn').addEventListener('click', ()=>player.retreat());
+$('nextBtn').addEventListener('click', ()=>player.skipForward());
+
+const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+$('rateBtn').addEventListener('click', ()=>{
+  const idx = RATES.findIndex(r => r > player.rate + 0.01);
+  setRate(idx === -1 ? RATES[0] : RATES[idx]);
+  if(player.playing) player.speakCurrent();
+});
+function setRate(r){
+  player.rate = r;
+  $('rateLabel').textContent = '×' + r.toFixed(2).replace(/0+$/,'').replace(/\.$/,'.0');
+  $('rateVal').textContent = '×' + r.toFixed(2).replace(/0+$/,'').replace(/\.$/,'.0');
+  $('rateRange').value = r;
+  kvSet('cfg:rate', r).catch(()=>{});
+}
+$('rateRange').addEventListener('input', e=>{
+  setRate(parseFloat(e.target.value));
+  if(player.playing) player.speakCurrent();
+});
+
+/* ---------- voces ---------- */
+function populateVoices(){
+  const sel = $('voiceSel');
+  const voices = speechSynthesis.getVoices();
+  if(!voices.length) return;
+  const es = voices.filter(v => /^es/i.test(v.lang));
+  const rest = voices.filter(v => !/^es/i.test(v.lang));
+  sel.innerHTML = '<option value="">Automática (español)</option>';
+  const addGroup = (label, list)=>{
+    if(!list.length) return;
+    const g = document.createElement('optgroup'); g.label = label;
+    for(const v of list){
+      const o = document.createElement('option');
+      o.value = v.voiceURI; o.textContent = v.name + ' (' + v.lang + ')';
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
+  };
+  addGroup('Español', es);
+  addGroup('Otras', rest);
+  kvGet('cfg:voice').then(uri=>{
+    if(!uri) return;
+    const v = voices.find(x => x.voiceURI === uri);
+    if(v){ player.voice = v; sel.value = uri; }
+  }).catch(()=>{});
+}
+if('speechSynthesis' in window){
+  populateVoices();
+  speechSynthesis.onvoiceschanged = populateVoices;
+}
+$('voiceSel').addEventListener('change', e=>{
+  const v = speechSynthesis.getVoices().find(x => x.voiceURI === e.target.value);
+  player.voice = v || null;
+  kvSet('cfg:voice', e.target.value).catch(()=>{});
+  if(player.playing) player.speakCurrent();
+});
+
+/* ---------- capítulos ---------- */
+function buildChapterList(){
+  const list = $('chapList');
+  list.innerHTML = '';
+  player.book.chapters.forEach((ch, i)=>{
+    const btn = document.createElement('button');
+    btn.className = 'chapItem' + (i === player.ch ? ' actual' : '');
+    btn.textContent = (i + 1) + '. ' + ch.title;
+    btn.addEventListener('click', ()=>{
+      $('chapOverlay').classList.add('hidden');
+      player.jumpTo(i, 0, 0);
+    });
+    list.appendChild(btn);
+  });
+}
+$('chapBtn').addEventListener('click', ()=>{ buildChapterList(); $('chapOverlay').classList.remove('hidden'); });
+
+/* ---------- ajustes ---------- */
+$('setBtn').addEventListener('click', ()=>$('setOverlay').classList.remove('hidden'));
+for(const ov of ['chapOverlay', 'setOverlay']){
+  $(ov).addEventListener('click', e=>{ if(e.target === $(ov)) $(ov).classList.add('hidden'); });
+}
+
+$('fontRange').addEventListener('input', e=>{
+  const px = +e.target.value;
+  document.documentElement.style.setProperty('--book-size', px + 'px');
+  $('fontVal').textContent = px;
+  kvSet('cfg:font', px).catch(()=>{});
+});
+
+function updateSleepUI(min){
+  $('sleepLabel').textContent = min > 0 ? min + ' min' : 'apagado';
+  document.querySelectorAll('#sleepChips .chip').forEach(c=>{
+    c.classList.toggle('on', +c.dataset.min === min);
+  });
+}
+$('sleepChips').addEventListener('click', e=>{
+  const chip = e.target.closest('.chip');
+  if(chip) player.setSleep(+chip.dataset.min);
+});
+$('sleepBtn').addEventListener('click', ()=>{
+  const order = [0, 15, 30, 60];
+  const cur = player.sleepAt > 0 ? Math.round((player.sleepAt - Date.now()) / 60000) : 0;
+  let next = order.find(m => m > cur);
+  player.setSleep(next === undefined ? 0 : next);
+});
+
+function setTheme(t){
+  document.documentElement.dataset.theme = t;
+  $('themeDark').classList.toggle('on', t === 'dark');
+  $('themeLight').classList.toggle('on', t === 'light');
+  const meta = document.querySelector('meta[name=theme-color]');
+  if(meta) meta.content = t === 'dark' ? '#12141b' : '#f4f0e6';
+  kvSet('cfg:theme', t).catch(()=>{});
+}
+$('themeDark').addEventListener('click', ()=>setTheme('dark'));
+$('themeLight').addEventListener('click', ()=>setTheme('light'));
+
+/* ---------- arranque ---------- */
+(async function init(){
+  if(!('speechSynthesis' in window)){
+    toast('Este navegador no soporta síntesis de voz. Usa Chrome en Android.', 6000);
+  }
+  try{
+    const [rate, font, theme] = await Promise.all([kvGet('cfg:rate'), kvGet('cfg:font'), kvGet('cfg:theme')]);
+    if(rate) setRate(rate);
+    if(font){
+      document.documentElement.style.setProperty('--book-size', font + 'px');
+      $('fontRange').value = font; $('fontVal').textContent = font;
+    }
+    setTheme(theme || 'dark');
+  }catch(e){ setTheme('dark'); }
+  renderLibrary();
+})();
+</script>
+</body>
+</html>
